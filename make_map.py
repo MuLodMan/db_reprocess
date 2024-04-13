@@ -11,81 +11,40 @@ import pyclipper
 unpunished = 2#0.875
 punished_weak = 1#0.75
 punished_aug = 3#1.125
+punished_count = 0
+unpunished_count = 0
+
+def get_punish():
+    return (punished_count , unpunished_count)
 class make_padding(DataProcess):
       size_dict = {}
       def __init__(self,maxH,maxW):
          maxSize =  maxH if maxH > maxW else maxW
-         self.min_c_size = maxSize / 4
-         self.mid_c_size = maxSize / 2
+         min_size = maxSize / 4
+         mid_size = maxSize / 2 
+         self.min_c_size = min_size + (32 - min_size % 32)
+         self.mid_c_size = mid_size + (32 - mid_size % 32)
          self.max_c_size = maxSize
         
       def process(self, data:dict):
-          img = data.pop('image')
-          gt = data.pop('gt')
-          mask = data.pop('mask')
-          thresh = data.pop('thresh')
-          punishMask = data.pop('punish')
-          
+          mask = data.get('mask')
           (Height,Width) = mask.shape
           maxS = Height if Height > Width else Width
-          padding_h = 128 - Height % 32
-          padding_w = 128 - Width  % 32
-          top = math.ceil(padding_h / 2)
-          bottom = padding_h - top
-          left = math.ceil(padding_w / 2)
-          right = padding_w - left
           cur_group = 0
-          
           if maxS <= self.min_c_size: #4 *32
-             c_size = self.min_c_size #detail implementation in model dataloader
-             padded_h = c_size - Height
-             padded_w = c_size - Width
-             top = math.ceil(padded_h / 2)
-             bottom = padded_h - top
-             left = math.ceil(padded_w / 2)
-             right = padded_w - left 
              cur_group = 0
           elif maxS <= self.mid_c_size:
-             c_size = self.mid_c_size
-             padded_h = c_size - Height
-             padded_w = c_size - Width
-             top = math.ceil(padded_h / 2)
-             bottom = padded_h - top
-             left = math.ceil(padded_w / 2)
-             right = padded_w - left 
              cur_group = 1
           elif maxS <= self.max_c_size:
-             c_size = self.max_c_size
-             padded_h = c_size - Height
-             padded_w = c_size - Width
-             top = math.ceil(padded_h / 2)
-             bottom = padded_h - top
-             left = math.ceil(padded_w / 2)
-             right = padded_w - left 
              cur_group = 2
           else:
               raise Exception("bad maxSize")
-          top = int( top )
-          bottom = int( bottom )
-          left = int( left )
-          right = int( right )
-          padded_image =  cv.copyMakeBorder(src = img,top = top,bottom = bottom,left = left,right = right,borderType=cv.BORDER_CONSTANT,value=0)
-
-          padded_gt = cv.copyMakeBorder(src = gt , top = top , bottom = bottom , left = left , right = right , borderType=cv.BORDER_CONSTANT,value=0) 
-
-          padded_mask = cv.copyMakeBorder(src = mask,top=top,bottom=bottom,left=left,right=right,borderType=cv.BORDER_CONSTANT,value=0)
-
-          padded_thresh = cv.copyMakeBorder(src = thresh,top=top,bottom=bottom,left=left,right=right,borderType=cv.BORDER_CONSTANT,value=0) 
-
-          padded_punish_mask = cv.copyMakeBorder(src = punishMask,top=top,bottom=bottom,left=left,right=right,borderType=cv.BORDER_CONSTANT,value=0)
           
-          data['p_image'] = padded_image
-          data['p_gt'] = padded_gt
-          data['p_mask'] = padded_mask
-          data['p_thresh'] = padded_thresh
-          data['p_punish'] = padded_punish_mask
           data['s_group'] = cur_group
           return data
+      
+      def getCanvasSizes(self):
+          return (self.min_c_size,self.mid_c_size,self.max_c_size)
 
         
 class makeShrinkMap(DataProcess):
@@ -94,7 +53,7 @@ class makeShrinkMap(DataProcess):
     Typically following the process of class `MakeICDARData`.
     '''
     min_text_size = 8
-    shrink_ratio = 0.625
+    shrink_ratio = 0.4
 
     def __init__(self):
        pass
@@ -142,11 +101,10 @@ class makeShrinkMap(DataProcess):
 
         if filename is None:
             assert False
-        data['image']=image
-        data['polygons']=polygons
-        data['gt']=gt
-        data['mask']=mask
-        data['filename']=filename
+        data['polygons'] = polygons
+        data['gt'] = gt
+        data['mask'] = mask
+        data['filename'] = filename
         return data
 
     
@@ -258,7 +216,8 @@ class MakeGrabCut(DataProcess):
           padded_rects =  data.get('padded_rects',[])
           padded_polygons = data.get('padded_polygons',[])
           polygons = data.get('polygons',[])
-          
+          global unpunished_count
+          global punished_count
 
           padding_Len = len(padded_rects)
           assert padding_Len == len(polygons) == len(padded_polygons)
@@ -281,11 +240,13 @@ class MakeGrabCut(DataProcess):
                     grab_sub_mask = self.make_grab_cutMap(paddedHeight = paddedCropHeight , paddedWidth = paddedCropWidth , gr_points = gt_relative_p , image = paddedCropedImage,pr_polygon = padded_relative_p)
 
                     if grab_sub_mask is None:
+                        unpunished_count = unpunished_count + 1
                         self.fillconflictFreeing( grab_mask , minY=minY , maxY=maxY , minX=minX , maxX=maxX ,
                                                   submask = np.full(shape=(paddedCropHeight,paddedCropWidth), 
                                                                     fill_value = unpunished,dtype=np.uint8))
                     else:
                         # grab_mask[minY : maxY,minX : maxX] = grab_sub_mask
+                        punished_count = punished_count + 1
                         self.fillconflictFreeing(grab_mask ,  minY = minY , maxY = maxY , minX = minX , maxX = maxX ,submask = grab_sub_mask)
 
           self.holing_padded_map(data = data,grab_map = grab_mask)
@@ -327,7 +288,7 @@ class MakeGrabCut(DataProcess):
          if polygon_area <= 0:
              return None  
 
-         result_mask,result_bgdMoedel,reslut_fgdModel = cv.grabCut(img=image,mask=line_mask,rect=None,bgdModel=bgdModel,fgdModel=fgdModel,iterCount=20,mode=cv.GC_INIT_WITH_MASK)
+         result_mask,result_bgdMoedel,reslut_fgdModel = cv.grabCut(img=image,mask=line_mask,rect=None,bgdModel=bgdModel,fgdModel=fgdModel,iterCount=12,mode=cv.GC_INIT_WITH_MASK)
          
          new_mask = np.where((result_mask == cv.GC_BGD)|(result_mask == cv.GC_PR_BGD),0,1)
 

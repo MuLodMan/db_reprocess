@@ -8,7 +8,7 @@ from os.path import dirname,abspath
 chdir(dirname(abspath(__file__)))
 #set_current_working_space
 from make_data import uniform_data
-from make_map import makeShrinkMap , MakeBorderMap , MakeGrabCut , make_padding
+from make_map import makeShrinkMap , MakeBorderMap , MakeGrabCut , make_padding , get_punish
 import math
 
 import json
@@ -161,8 +161,8 @@ class ImageDataset(data.Dataset):
         return data
 
     def __len__(self):
-        return 20 #for debug samples
-       # return len(self.image_paths)
+        # return 20 #for debug samples
+       return len(self.image_paths)
 
 
     # -1) filename data_id image(origin) lines(list of array which contains ploy and text).
@@ -178,28 +178,19 @@ class ImageDataset(data.Dataset):
 
 if __name__ == '__main__':
     image_dataset = ImageDataset(data_dir='icdar2019\\',data_list='icdar2019\\train_loader.json')
-    data_collector = data_collection(r_dir='icdar2019\\',maxH = image_dataset.p_M_H ,maxW = image_dataset.p_M_W)
+    c_min,c_mid,c_max = image_dataset.load_padding.getCanvasSizes()
+    data_collector = data_collection(r_dir='icdar2019\\',c_min=c_min,c_mid=c_mid,c_max=c_max)
     # image_dataset = ImageDataset(data_dir='icdar2015\\',data_list='icdar2015\\train_loader.json')
+    # c_min,c_mid,c_max = image_dataset.load_padding.getCanvasSizes()
     # data_collector = data_collection(r_dir='icdar2015\\',maxH = image_dataset.p_M_H ,maxW = image_dataset.p_M_W)
     dataloader = DataLoader(image_dataset,batch_size=1)
-    for batch in dataloader:
+    for idx,batch in enumerate(dataloader):
         cur_filename = batch['filename'][0]
-        data_collector.save_to_image(image_array=batch['p_image'][0] , filename = cur_filename , mode='RGB',size_group=batch['s_group'][0].item())
-        # for show demo
-
-        # data_collector.save_to_image(image_array=batch['p_gt'][0]*255,filename='gt_map\\'+cur_filename,mode='L')
-        # data_collector.save_to_image(image_array=batch['p_mask'][0]*255,filename='mask_map\\'+cur_filename,mode='L')
-        # data_collector.save_to_image(image_array=batch['p_thresh'][0]*255,filename='thresh_map\\'+cur_filename,mode='L')
-        # data_collector.save_to_image(image_array=batch['p_punish'][0]*80,filename='punish_map\\'+cur_filename,mode='L')
-    
-        # for show demo end
-
-        concat_mask = np.concatenate((batch['p_gt'] , batch['p_mask'] , batch['p_thresh'] , batch['p_punish']) , axis = 0)
-        data_collector.save_to_image(image_array = concat_mask , filename = cur_filename.strip().split('.')[0] , mode='numpy')
-        
-        
-    
-    data_collector.save_total_info(dir_name = 'icdar2019\\')
+        concat_mask = np.concatenate((batch['gt'] , batch['mask'] , batch['thresh'] , batch['punish']) , axis = 0)
+        data_collector.save_to_image(image_array = concat_mask , filename = cur_filename.strip() , mode='numpy',size_group = batch['s_group'][0].item())  # after removing image suffix
+        if idx >0 and idx % 200==0:
+            p_c , unp_c = get_punish()
+            data_collector.save_total_info(dir_name = 'icdar2019\\',punish_c = p_c,unpunish_c = unp_c)
 
 
         
